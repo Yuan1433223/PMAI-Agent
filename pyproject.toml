@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools==84.2.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pmai-agent"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = ["pypdf==6.21.4"]
+
+[project.scripts]
+pmai = "pmai_agent.cli:main"
+
+[tool.setuptools]
+packages = ["pmai_agent"]
+
+[tool.setuptools.package-data]
+pmai_agent = ["samples/*.pdf"]
