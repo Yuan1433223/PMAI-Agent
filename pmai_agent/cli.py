@@ -29,8 +29,13 @@ def main(argv=None):
     live.add_argument("--cohort", default="")
     live.add_argument("--url")
     live.add_argument("--limit", type=int, default=3)
+    subs.add_parser("review").add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
     try:
+        if args.command == "review":
+            from .review import serve
+            serve(args.db, args.port)
+            return 0
         with closing(connect(args.db)) as db:
             if args.command == "import-list":
                 doc = import_list(db, args.pdf)

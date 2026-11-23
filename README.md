@@ -41,3 +41,7 @@ python -m pmai_agent investigate --company Anthropic --role Engineer --city "San
 导入名单后可用 `--company-id` 选择已登记主体。腾讯招聘适配器从首批最多 50 条候选中优先调查目标城市；其他企业尝试按英文名称查询 Greenhouse，再核实岗位所属公司。也可传 `--url` 指定这两类来源的岗位详情。国内中小企业覆盖仍有限。每次保存调查 ID，可用 `show` 看抓取时间、原文、引文位置、失败原因与未知项。
 
 Windows CPU 用户可运行 `python scripts/prepare_local_model.py` 在 `data/model` 准备 llama.cpp 和 Qwen2.5-1.5B-Instruct。脚本核对固定版本的 SHA-256。启用本地服务后将服务地址与模型别名填入 `.env`。
+
+## 核查与跟进
+
+运行 `python -m pmai_agent review`，打开终端打印的本机地址。输入企业名筛选调查，打开岗位查看支持原文、未知项和页面快照。可对岗位或整次调查保存“值得跟进”“判断有误”等反馈，并下载包含证据和反馈的 JSON。查看与刷新均只读取本地调查。
