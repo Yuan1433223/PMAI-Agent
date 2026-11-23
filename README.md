@@ -28,3 +28,16 @@ python -m unittest discover -s tests -v
 默认数据库为 `data/app.sqlite3`。可在子命令之前传入 `--db 文件路径`。
 
 用 `python -m pmai_agent demo` 回放一次补查；用 `python -m pmai_agent show 1` 查看调查，用 `python -m pmai_agent resume 1` 继续未结束的调查。数字取实际调查 ID。
+
+## 调查公开岗位
+
+把 `.env.example` 的配置项填入本机 `.env`；已有文件只补缺项。本地接口支持 Ollama 或 llama.cpp 的 OpenAI 兼容入口。配置本地模型和 DeepSeek 时，地点交给小模型，职责、届别和时效交给 `deepseek-flash`。只配置一个模型时由该模型完成分析。模型只接收任务条件与单岗位的公开材料。演示无需配置。
+
+```shell
+python -m pmai_agent investigate --company 腾讯 --role Agent --city 深圳 --cohort 2027 --limit 2
+python -m pmai_agent investigate --company Anthropic --role Engineer --city "San Francisco" --limit 1
+```
+
+导入名单后可用 `--company-id` 选择已登记主体。腾讯招聘适配器从首批最多 50 条候选中优先调查目标城市；其他企业尝试按英文名称查询 Greenhouse，再核实岗位所属公司。也可传 `--url` 指定这两类来源的岗位详情。国内中小企业覆盖仍有限。每次保存调查 ID，可用 `show` 看抓取时间、原文、引文位置、失败原因与未知项。
+
+Windows CPU 用户可运行 `python scripts/prepare_local_model.py` 在 `data/model` 准备 llama.cpp 和 Qwen2.5-1.5B-Instruct。脚本核对固定版本的 SHA-256。启用本地服务后将服务地址与模型别名填入 `.env`。

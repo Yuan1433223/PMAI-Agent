@@ -1,9 +1,9 @@
 """A resumable investigation. Each source page describes one identified job."""
 import json
+import re
 
 
 FIELDS = ("role", "city", "cohort", "validity")
-STATUSES = {"supports", "contradicts"}
 
 
 def setup(db):
@@ -60,6 +60,12 @@ def check_claims(body, response):
         offset = body.find(quote)
         if offset < 0:
             raise ValueError(f"{field} 引文不在该岗位快照中")
+        if field == "cohort" and not re.search(r"毕业|应届|\d{4}\s*届|graduat|class of", quote, re.I):
+            continue
+        if field == "validity" and not re.search(
+                r"已截止|招聘中|已关闭|停止招募|currently open|no longer accepting|applications? (?:are )?closed",
+                quote, re.I):
+            continue
         claims.append((field, verdict, quote, offset))
     return claims
 
