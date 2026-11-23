@@ -26,3 +26,5 @@ python -m unittest discover -s tests -v
 ```
 
 默认数据库为 `data/app.sqlite3`。可在子命令之前传入 `--db 文件路径`。
+
+用 `python -m pmai_agent demo` 回放一次补查；用 `python -m pmai_agent show 1` 查看调查，用 `python -m pmai_agent resume 1` 继续未结束的调查。数字取实际调查 ID。
