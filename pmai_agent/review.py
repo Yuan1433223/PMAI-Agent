@@ -40,7 +40,7 @@ def save(db, run, job, action, note):
 
 def link(url):
     safe = escape(url, quote=True)
-    if url.startswith("https://"):
+    if url.startswith(("https://", "http://")):
         return f'<a href="{safe}" rel="noreferrer">打开招聘原页</a>'
     return safe
 
@@ -76,6 +76,13 @@ def detail(result, token):
     target = " · ".join(str(config[k]) for k in ("city", "role", "cohort") if config.get(k))
     parts = [f'<a href="/">调查列表</a> · <a href="/export?id={run}">导出证据与反馈</a>',
              f'<p>{escape(target)} · {escape(config["mode"])} · {escape(result["reason"] or result["phase"])}</p>']
+    origin = result["company_source"]
+    if origin and origin["publication"]:
+        parts.append(f'<p>名单来源 · {escape(origin["city"])} {origin["year"]} 年 {escape(origin["status"])} · '
+                     f'第 {origin["page_no"]} 页 / 序号 {origin["row_no"]} · '
+                     f'<a href="{escape(origin["publication"])}">主管部门公示</a></p>')
+    elif config["mode"] == "live":
+        parts.append("<p>名单来源 · 非官方名单批次</p>")
     options = ['<option value="">整次调查</option>']
     for job in result["jobs"]:
         options.append(f'<option value="{escape(job["job"])}">{escape(job["title"])}</option>')
@@ -92,9 +99,11 @@ def detail(result, token):
                 parts.append("<dd>未知</dd>")
         parts.append("</dl></article>")
     for page in result["pages"]:
+        evidence = page.get("source")
+        proof = f'<p>招聘主体原文：{escape(evidence["employer_quote"])}</p>' if evidence else ""
         parts.append(f'<details><summary>{escape(page["title"] or page["url"])} · '
                      f'{escape(page["status"])}</summary>{link(page["url"])} '
-                     f'{escape(page["note"])}<pre>{escape(page["body"] or "")}</pre></details>')
+                     f'{escape(page["note"])}{proof}<pre>{escape(page["body"] or "")}</pre></details>')
     parts.append(f'<form method="post" action="/feedback"><input type="hidden" name="token" value="{token}">'
                  f'<input type="hidden" name="id" value="{run}"><select aria-label="目标" name="job">'
                  + "".join(options) + '</select><select aria-label="标注" name="action">'

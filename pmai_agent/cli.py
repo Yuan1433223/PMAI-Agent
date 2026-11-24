@@ -4,10 +4,17 @@ import sqlite3
 import sys
 from contextlib import closing
 
-from .lists import connect, entries, import_list
+from .city_lists import CITY_LISTS
+from .batch import batch_report
+from .lists import city_document, connect, entries, import_list
 from .investigation import create, report, run_to_end, setup
 from .replay import Replay, demo
 from .live import Models, PublicJobs, model_config, settings
+from .web_jobs import WebJobs
+
+
+def job_source(values, config):
+    return WebJobs(values, config) if config.get("web_search") else PublicJobs()
 
 
 def main(argv=None):
@@ -17,12 +24,16 @@ def main(argv=None):
     parser.add_argument("--db", default="data/app.sqlite3")
     subs = parser.add_subparsers(dest="command", required=True)
     subs.add_parser("import-list").add_argument("pdf")
+    city_import = subs.add_parser("import-city-list")
+    city_import.add_argument("pdf")
+    city_import.add_argument("--city", choices=CITY_LISTS, default="深圳")
     subs.add_parser("list").add_argument("document", type=int)
     subs.add_parser("demo")
     for name in ("show", "resume"):
         subs.add_parser(name).add_argument("run", type=int)
+    subs.add_parser("summarize").add_argument("runs", type=int, nargs="+")
     live = subs.add_parser("investigate")
-    identity = live.add_mutually_exclusive_group(required=True)
+    identity = live.add_mutually_exclusive_group()
     identity.add_argument("--company")
     identity.add_argument("--company-id", type=int)
     identity.add_argument("--document", type=int)
@@ -33,6 +44,7 @@ def main(argv=None):
     live.add_argument("--cohort", default="")
     live.add_argument("--url")
     live.add_argument("--limit", type=int, default=3)
+    live.add_argument("--web-search", action="store_true", help="按公司全称查找公开中文招聘页面")
     subs.add_parser("review").add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
     try:
@@ -41,28 +53,43 @@ def main(argv=None):
             serve(args.db, args.port)
             return 0
         with closing(connect(args.db)) as db:
-            if args.command == "import-list":
-                doc = import_list(db, args.pdf)
+            if args.command in ("import-list", "import-city-list"):
+                official = CITY_LISTS[args.city] if args.command == "import-city-list" else None
+                doc = import_list(db, args.pdf, official)
                 result = {"document_id": doc, "rows": len(entries(db, doc))}
             elif args.command == "list":
                 result = entries(db, args.document)
             elif args.command == "demo":
                 result = demo(db)
+            elif args.command == "summarize":
+                setup(db)
+                result = batch_report(db, args.runs)
             elif args.command == "investigate":
                 values = settings()
                 config = dict(mode="live", city=args.city, role=args.role, cohort=args.cohort,
                               url=args.url, limit=args.limit, **model_config(values))
+                document = args.document
+                if all(value is None for value in (document, args.company, args.company_id)):
+                    official = CITY_LISTS.get(args.city)
+                    document = city_document(db, official) if official else None
+                    if document is None:
+                        raise ValueError("该城市尚无默认名单；先 import-city-list，或手动指定企业")
+                is_official = document is not None and db.execute(
+                    "SELECT 1 FROM official_lists WHERE document_id=?", (document,)).fetchone() is not None
+                config["web_search"] = args.web_search or is_official
+                if config["web_search"] and not values.get("DEEPSEEK_API_KEY"):
+                    raise ValueError("请先配置 DEEPSEEK_API_KEY 以搜索公开中文招聘页")
                 if not config["complex_enabled"] and not config["local_model"]:
                     raise ValueError("请先参照 .env.example 配置模型")
                 if not 1 <= args.count <= 20 or args.first_row < 1 or not 1 <= args.limit <= 20:
                     raise ValueError("每批 1 至 20 家，每家 1 至 20 页，起始序号至少为 1")
                 model = Models(values)
-                if args.document is not None:
+                if document is not None:
                     if args.url:
                         raise ValueError("指定岗位链接时请选择单个企业")
                     companies = [r[0] for r in db.execute(
                         "SELECT company_id FROM source_entries WHERE document_id=? AND row_no>=? "
-                        "ORDER BY row_no LIMIT ?", (args.document, args.first_row, args.count))]
+                        "ORDER BY row_no LIMIT ?", (document, args.first_row, args.count))]
                     if not companies:
                         raise ValueError("名单所选范围为空")
                 elif args.company_id is not None:
@@ -74,14 +101,16 @@ def main(argv=None):
                     companies = [company]
                 runs = [create(db, company, config) for company in companies]
                 print(f"investigation_ids={runs}", file=sys.stderr, flush=True)
-                reports = [run_to_end(db, run, PublicJobs(), model) for run in runs]
-                result = reports if args.document is not None else reports[0]
+                source = job_source(values, config)
+                reports = [run_to_end(db, run, source, model) for run in runs]
+                result = reports if document is not None else reports[0]
             else:
                 setup(db)
                 result = report(db, args.run)
                 if args.command == "resume":
                     if result["config"]["mode"] == "live":
-                        result = run_to_end(db, args.run, PublicJobs(), Models(settings()))
+                        values = settings()
+                        result = run_to_end(db, args.run, job_source(values, result["config"]), Models(values))
                     else:
                         replay = Replay()
                         result = run_to_end(db, args.run, replay, replay)

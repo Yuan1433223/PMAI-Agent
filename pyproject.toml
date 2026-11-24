@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "pmai-agent"
 version = "0.1.0"
 requires-python = ">=3.11"
-dependencies = ["pypdf==6.21.4"]
+dependencies = ["pypdf[crypto]==6.21.4"]
 
 [project.scripts]
 pmai = "pmai_agent.cli:main"

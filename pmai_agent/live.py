@@ -155,6 +155,13 @@ class Models:
                   "(a short exact substring from this page). City means workplace; role means duties. "
                   "Only judge cohort with explicit graduation requirements. Only judge validity "
                   "from explicit open/closed or deadline evidence. Missing details are unknown.")
+        if config.get("web_search"):
+            prompt += (" Judge each field independently. Role supports if the title or duties "
+                       "match any one of the target directions; they need not match all. An Agent "
+                       "developer or a role building large-model applications supports an "
+                       "Agent/LLM/FDE target even when senior. Do not use seniority, years of work, "
+                       "city, or graduation status as role evidence. Quote actual work location "
+                       "for city. Employer name and office address never establish work location.")
         page = body[:6500]
         if not cloud and fields == ["city"]:
             prompt = ("Read the job's Workplace line. Copy its location exactly, without the prefix. "
@@ -211,6 +218,9 @@ class Models:
             raise ValueError("恢复调查需要配置 DEEPSEEK_API_KEY")
         if not cloud and not local:
             raise ValueError("请配置本地模型或 DEEPSEEK_API_KEY")
+        if config.get("web_search"):
+            # A free-form vacancy excerpt needs semantic city interpretation alongside the role.
+            return self.decide(body, config, ["city", *fields], cloud)
         if not local:
             return self.decide(body, config, ["city", *fields], True)
         result = self.decide(body, config, ["city"], False)

@@ -2,6 +2,8 @@
 import json
 import re
 
+from .lists import provenance
+
 
 FIELDS = ("role", "city", "cohort", "validity")
 
@@ -27,6 +29,11 @@ def setup(db):
             run INTEGER NOT NULL, url TEXT NOT NULL, field TEXT NOT NULL, verdict TEXT NOT NULL,
             quote TEXT NOT NULL, offset INTEGER NOT NULL, PRIMARY KEY(run,url,field),
             FOREIGN KEY(run,url) REFERENCES visits(run,url)
+        );
+        CREATE TABLE IF NOT EXISTS verified_sources (
+            run INTEGER NOT NULL, url TEXT NOT NULL, kind TEXT NOT NULL,
+            employer_quote TEXT NOT NULL, snapshot TEXT,
+            PRIMARY KEY(run,url), FOREIGN KEY(run,url) REFERENCES visits(run,url)
         );
     """)
 
@@ -64,10 +71,12 @@ def check_claims(body, response):
         offset = body.find(quote)
         if offset < 0:
             raise ValueError(f"{field} 引文不在该岗位快照中")
+        if field == "city" and re.search(r"有限公司|股份公司|总部|单位地址|办公地址|企业名称", quote):
+            continue
         if field == "cohort" and not re.search(r"毕业|应届|\d{4}\s*届|graduat|class of", quote, re.I):
             continue
         if field == "validity" and not re.search(
-                r"已截止|招聘中|已关闭|停止招募|currently open|no longer accepting|applications? (?:are )?closed",
+                r"已截止|招聘中|已关闭|停止招募|暂停招聘|currently open|no longer accepting|applications? (?:are )?closed",
                 quote, re.I):
             continue
         claims.append((field, verdict, quote, offset))
@@ -105,13 +114,15 @@ def step(db, run, source, model):
         claims = []
         note = ""
         status = "inaccessible"
+        source_evidence = None
         try:
             page = source.fetch(url, state["company"])
             job, title, body = page["job"], page["title"], page["body"]
             if not body.strip():
                 raise ValueError("正文为空")
-            status = "unverified"
-            response = model.assess(body, config)
+            source_evidence = page.get("source")
+            status = "unverified" if job else "verified_entrance"
+            response = model.assess(body, config) if job else {}
             if not isinstance(response, dict):
                 raise ValueError("模型输出应为字段对象")
             rejected = []
@@ -120,7 +131,8 @@ def step(db, run, source, model):
                     claims.extend(check_claims(body, {field: item}))
                 except ValueError as exc:
                     rejected.append(str(exc))
-            status = "assessed" if not rejected or claims else "unverified"
+            if job:
+                status = "assessed" if not rejected or claims else "unverified"
             note = "；".join(rejected)
             # Supplement only an already relevant job and only for an explicit target cohort.
             known = {item[0]: item[1] for item in claims}
@@ -133,6 +145,10 @@ def step(db, run, source, model):
             note = str(exc)
         db.execute("INSERT INTO visits(run,url,job,title,body,status,note) VALUES(?,?,?,?,?,?,?)",
                    (run, url, job, title, body, status, note))
+        if source_evidence:
+            db.execute("INSERT INTO verified_sources VALUES(?,?,?,?,?)",
+                       (run, url, source_evidence["kind"], source_evidence["employer_quote"],
+                        source_evidence.get("snapshot")))
         db.executemany("INSERT INTO claims VALUES(?,?,?,?,?,?)", [(run, url, *c) for c in claims])
         db.execute("UPDATE investigations SET phase=?,queue=?,reason=? WHERE id=?",
                    ("visit" if queue else "done", json.dumps(queue), "" if queue else "材料已查完", run))
@@ -153,14 +169,17 @@ def report(db, run):
         page = dict(visit)
         page["claims"] = [dict(r) for r in db.execute(
             "SELECT field,verdict,quote,offset FROM claims WHERE run=? AND url=?", (run, page["url"]))]
+        source = db.execute("SELECT kind,employer_quote,snapshot FROM verified_sources WHERE run=? AND url=?",
+                            (run, page["url"])).fetchone()
+        if source:
+            page["source"] = dict(source)
         pages.append(page)
         if page["job"] is None:
             continue
         job = jobs.setdefault(page["job"], {"job": page["job"], "title": page["title"], "fields": {}})
-        for line in (page["body"] or "").splitlines():
-            if re.search(r"(?:\d+\s*年(?:以上)?[^。\n]{0,24}经验|\d+\+?\s+years.{0,35}experience)", line, re.I):
-                job.setdefault("experience", {"quote": line[:400], "url": page["url"]})
-                break
+        experience = required_experience(page["body"] or "")
+        if experience:
+            job.setdefault("experience", {"quote": experience, "url": page["url"]})
         for claim in page["claims"]:
             job["fields"].setdefault(claim["field"], []).append(dict(claim, url=page["url"]))
     for job in jobs.values():
@@ -175,4 +194,21 @@ def report(db, run):
         else:
             job["tier"] = "待确认机会"
     return {"id": run, "company": state["company"], "phase": state["phase"], "reason": state["reason"],
+            "company_source": provenance(db, state["company_id"]),
             "discovery": state["discovery"], "config": config, "jobs": list(jobs.values()), "pages": pages}
+
+
+def required_experience(body):
+    for line in body.splitlines():
+        # A structured header can explicitly give a years range with no “经验” suffix.
+        header = re.match(r"^\s*(?:[\u4e00-\u9fff]+[-－][\u4e00-\u9fff]+|深圳市?)\s+"
+                          r"([1-9]\d*\s*(?:[-–至]\s*\d+\s*年|年及?以上))", line)
+        if header:
+            return header.group(0).strip()
+        clauses = re.split(r"[；。;\n]", line)
+        for clause in clauses:
+            match = re.search(r"(?:[1-9]\d*\s*年(?:及?以上)?[^。\n]{0,28}经验|"
+                              r"[1-9]\d*\+?\s+years.{0,35}experience)", clause, re.I)
+            if match and not re.search(r"优先|加分|可放宽|preferred|nice to have", clause, re.I):
+                return match.group(0)
+    return None

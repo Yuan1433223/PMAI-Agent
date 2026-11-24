@@ -29,11 +29,23 @@ python -m unittest discover -s tests -v
 
 用 `python -m pmai_agent demo` 回放一次补查；用 `python -m pmai_agent show 1` 查看调查，用 `python -m pmai_agent resume 1` 继续未结束的调查。数字取实际调查 ID。
 
-## 调查公开岗位
+## 从深圳名单开始
+
+下载[深圳市中小企业服务局公示附件 1](https://zxqyj.sz.gov.cn/attachment/1/1671/1671112/12595049.pdf)。当前登记的是 2025 年度 2,536 家企业的公示快照。导入时会校验原件 SHA-256 和行数，并保存来源、页码及行号。
+
+```shell
+python -m pmai_agent import-city-list "<已下载的官方 PDF>"
+python -m pmai_agent investigate --city 深圳 --first-row 1 --count 8 --role "Agent / 大模型应用 / FDE" --cohort 2027 --limit 4
+python -m pmai_agent summarize 1 2 3 4 5 6 7 8
+```
+
+`summarize` 使用调查命令打印的实际 ID。省略企业和文档参数时使用该城市登记的官方名单。公开中文招聘搜索需要在 `.env` 配置 `DEEPSEEK_API_KEY`。每家发两次入口查询，最多核查 `--limit` 个页面。计数区分有主体证据的招聘入口、具体岗位正文和待应届生核查的岗位。手动指定企业时可加 `--web-search` 使用同一搜索方式。详见[深圳样本验收](docs/深圳样本验收.md)。
+
+## 手动调查公开岗位
 
 把 `.env.example` 的配置项填入本机 `.env`；已有文件只补缺项。本地接口支持 Ollama 或 llama.cpp 的 OpenAI 兼容入口。配置本地模型和 DeepSeek 时，地点交给小模型，职责、届别和时效交给 `deepseek-flash`。只配置一个模型时由该模型完成分析。模型只接收任务条件与单岗位的公开材料。演示无需配置。
 
-配置 `PMAI_LOCAL_ONLY=1` 可使用纯本地推理。公开岗位调查仍需联网读取招聘来源。
+腾讯及 Greenhouse 调查可用 `PMAI_LOCAL_ONLY=1` 切换到本地推理。中文网页搜索仍使用配置的 DeepSeek 搜索和招聘主体核对。公开岗位调查需要联网。
 
 ```shell
 python -m pmai_agent investigate --company 腾讯 --role Agent --city 深圳 --cohort 2027 --limit 2
