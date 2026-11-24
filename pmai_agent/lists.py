@@ -109,6 +109,20 @@ def city_document(db, official):
     return row["document_id"] if row else None
 
 
+def manual_company(db, name):
+    name = name.strip()
+    if not name:
+        raise ValueError("企业名称不能为空")
+    with db:
+        db.execute("BEGIN IMMEDIATE")
+        row = db.execute("""SELECT c.id FROM companies c WHERE c.raw_name=?
+                            AND NOT EXISTS (SELECT 1 FROM source_entries e WHERE e.company_id=c.id)
+                            ORDER BY c.id LIMIT 1""", (name,)).fetchone()
+        if row:
+            return row["id"]
+        return db.execute("INSERT INTO companies(raw_name) VALUES(?)", (name,)).lastrowid
+
+
 def provenance(db, company_id):
     row = db.execute("""SELECT d.id AS document_id, d.digest, l.city, l.year, l.status,
                                l.publication, l.attachment, e.row_no, e.page_no, p.line_no

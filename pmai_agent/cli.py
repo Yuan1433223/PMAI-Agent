@@ -6,7 +6,7 @@ from contextlib import closing
 
 from .city_lists import CITY_LISTS
 from .batch import batch_report
-from .lists import city_document, connect, entries, import_list
+from .lists import city_document, connect, entries, import_list, manual_company
 from .investigation import create, report, run_to_end, setup
 from .replay import Replay, demo
 from .live import Models, PublicJobs, model_config, settings
@@ -95,10 +95,7 @@ def main(argv=None):
                 elif args.company_id is not None:
                     companies = [args.company_id]
                 else:
-                    with db:
-                        company = db.execute("INSERT INTO companies(raw_name) VALUES(?)",
-                                             (args.company,)).lastrowid
-                    companies = [company]
+                    companies = [manual_company(db, args.company)]
                 runs = [create(db, company, config) for company in companies]
                 print(f"investigation_ids={runs}", file=sys.stderr, flush=True)
                 source = job_source(values, config)
