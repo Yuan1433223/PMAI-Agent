@@ -122,6 +122,15 @@ def step(db, run, source, model):
                 raise ValueError("正文为空")
             source_evidence = page.get("source")
             status = "unverified" if job else "verified_entrance"
+            if source_evidence and source_evidence["kind"] == "business":
+                quote = page.get("business_quote", "")
+                offset = body.find(quote) if quote else -1
+                if offset < 0:
+                    source_evidence = None
+                    status = "unverified"
+                    raise ValueError("业务引文不在原文快照中")
+                claims.append(("business", "supports", quote, offset))
+                status = "verified_business"
             response = model.assess(body, config) if job else {}
             if not isinstance(response, dict):
                 raise ValueError("模型输出应为字段对象")

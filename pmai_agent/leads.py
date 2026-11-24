@@ -1,6 +1,8 @@
 """Persistent local job-search leads, linked to the investigations that found them."""
 import csv
 import io
+import re
+import unicodedata
 
 from .investigation import get_run, report
 
@@ -49,6 +51,11 @@ def supporting_evidence(result, job):
             if page["job"] == job["job"] and page["body"]:
                 return ("有岗位原文，匹配条件待核查", job["title"], page["url"], 2)
     for page in result["pages"]:
+        if page.get("source", {}).get("kind") == "business":
+            for claim in page["claims"]:
+                if claim["field"] == "business":
+                    return ("有相关业务证据，岗位和届别待搜索", claim["quote"], page["url"], 3)
+    for page in result["pages"]:
         if "source" in page:
             return ("已核实招聘入口，相关岗位待搜索", page["source"]["employer_quote"], page["url"], 1)
     origin = result["company_source"]
@@ -58,6 +65,13 @@ def supporting_evidence(result, job):
     return ("来自本地调查，相关性待核查", "", "", 0)
 
 
+def documented_alias(company, identity_quote):
+    text = unicodedata.normalize("NFKC", identity_quote or "")
+    name = unicodedata.normalize("NFKC", company)
+    match = re.search(re.escape(name) + r"\*{0,2}\s*\(\s*(?:以下)?简称\s*[“\"「]([^”\"」\r\n]{1,40})[”\"」]", text)
+    return match[1].strip() if match else ""
+
+
 def save_lead(db, run_id, job_key=""):
     run = get_run(db, run_id)
     result = report(db, run_id)
@@ -65,8 +79,14 @@ def save_lead(db, run_id, job_key=""):
     if job_key and not job:
         raise ValueError("该岗位不属于本次调查")
     title = job["title"] if job else ""
-    terms = " ".join(part for part in (result["company"], title or result["config"].get("role")) if part)
     reason, quote, url, rank = supporting_evidence(result, job)
+    identity_quote = next((page.get("source", {}).get("employer_quote")
+                           for page in result["pages"] if page["url"] == url), None)
+    alias = documented_alias(result["company"], identity_quote)
+    directions = [title] if title else re.split(r"[/／、|]+", result["config"].get("role") or "")
+    names = [result["company"], alias] if alias else [result["company"]]
+    terms = "\n".join(dict.fromkeys(f"{name} {item.strip()}".rstrip()
+                                   for name in names for item in directions))
     with db:
         db.execute("INSERT INTO saved_leads(company_id,job,job_title) VALUES(?,?,?) "
                    "ON CONFLICT(company_id,job) DO NOTHING", (run["company_id"], job_key, title))
@@ -77,6 +97,12 @@ def save_lead(db, run_id, job_key=""):
                    "search_terms=excluded.search_terms, evidence_rank=excluded.evidence_rank",
                    (lead_id, run_id, reason, quote, url, terms, rank))
     return lead_id
+
+
+def collect_business_lead(db, result):
+    if any(page.get("source", {}).get("kind") == "business" for page in result["pages"]):
+        setup_leads(db)
+        return save_lead(db, result["id"])
 
 
 def update_lead(db, lead_id, stage, note):
@@ -100,17 +126,22 @@ def saved_leads(db, view="all"):
         raise ValueError("清单筛选条件无效")
     condition = conditions.get(view, "l.stage=?")
     params = (view,) if view in STAGES else ()
-    return [dict(row) for row in db.execute(f"""
+    rows = [dict(row) for row in db.execute(f"""
         SELECT l.*, c.raw_name AS company, o.run, o.reason, o.quote, o.source_url, o.search_terms,
+               source.employer_quote AS identity_quote,
                (SELECT COUNT(*) FROM lead_observations h WHERE h.lead_id=l.id) AS observations
         FROM saved_leads l JOIN companies c ON c.id=l.company_id
         JOIN lead_observations o ON o.lead_id=l.id AND o.run=(
             SELECT history.run FROM lead_observations history WHERE history.lead_id=l.id
             ORDER BY history.evidence_rank DESC, history.run DESC LIMIT 1
         )
+        LEFT JOIN verified_sources source ON source.run=o.run AND source.url=o.source_url
         WHERE {condition}
         ORDER BY l.reviewed_at IS NOT NULL, l.id DESC
     """, params)]
+    for row in rows:
+        row["alias"] = documented_alias(row["company"], row["identity_quote"])
+    return rows
 
 
 def export_csv(rows):
@@ -122,11 +153,11 @@ def export_csv(rows):
 
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(("企业全称", "岗位", "搜索词", "状态", "首次保存时间（UTC）", "发现依据",
+    writer.writerow(("企业全称", "网页所列简称", "岗位", "搜索词", "状态", "首次保存时间（UTC）", "发现依据",
                      "原文", "来源链接", "备注"))
     for row in rows:
         writer.writerow([cell(value) for value in (
-            row["company"], row["job_title"], row["search_terms"], STAGES[row["stage"]],
+            row["company"], row["alias"], row["job_title"], row["search_terms"], STAGES[row["stage"]],
             row["first_seen"], row["reason"], row["quote"], row["source_url"], row["note"],
         )])
     return "\ufeff" + output.getvalue()

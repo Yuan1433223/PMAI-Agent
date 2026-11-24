@@ -8,8 +8,9 @@ def batch_report(db, run_ids):
     for run_id in run_ids:
         run = report(db, run_id)
         origin = run["company_source"]
-        if not origin or not origin["publication"] or not run["config"].get("web_search"):
-            raise ValueError(f"调查 {run_id} 不是官方名单调查")
+        if (not origin or not origin["publication"] or not run["config"].get("web_search")
+                or run["config"].get("business_search")):
+            raise ValueError(f"调查 {run_id} 不是官方名单招聘调查")
         key = (origin["document_id"], origin["row_no"])
         if key in seen:
             raise ValueError("同一名单行只能计入一次")

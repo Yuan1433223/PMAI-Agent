@@ -33,6 +33,8 @@ def candidate_url(value):
 
 
 class WebJobs:
+    accept_url = staticmethod(candidate_url)
+
     def __init__(self, values, config):
         self.key = values.get("DEEPSEEK_API_KEY")
         self.config = config
@@ -41,12 +43,13 @@ class WebJobs:
         if not self.key:
             raise UnsupportedCompany("公开入口搜索需要配置 DEEPSEEK_API_KEY")
         if config.get("url"):
-            url = candidate_url(config["url"])
+            url = self.accept_url(config["url"])
             if not url:
                 raise ValueError("该链接不在支持的招聘来源范围内")
             return [url]
-        general = self.search(f'"{company}" 招聘 校招', company)
-        focused = self.search(f'"{company}" {config["city"]} {config["role"]} 招聘', company)
+        broad_query, target_query = self.queries(company, config)
+        general = self.search(broad_query, company)
+        focused = self.search(target_query, company)
         # Give both the broader recruitment query and the user's target query a chance.
         ranked = []
         for index in range(max(len(general), len(focused))):
@@ -54,6 +57,9 @@ class WebJobs:
                 if index < len(urls) and urls[index] not in ranked:
                     ranked.append(urls[index])
         return ranked
+
+    def queries(self, company, config):
+        return f'"{company}" 招聘 校招', f'"{company}" {config["city"]} {config["role"]} 招聘'
 
     def search(self, query, company):
         result = request_json(TOOLS + "search", {"query": query[:128], "count": 8}, self.key)
@@ -63,12 +69,12 @@ class WebJobs:
         rows = sorted((row for row in rows if isinstance(row, dict)),
                       key=lambda row: normalized(company) not in normalized(str(row.get("title", ""))))
         return list(dict.fromkeys(url for row in rows if isinstance(row.get("url"), str)
-                                  and (url := candidate_url(row["url"]))))
+                                  and (url := self.accept_url(row["url"]))))
 
     def fetch(self, url, company):
         if not self.key:
             raise ValueError("恢复搜索需要配置 DEEPSEEK_API_KEY")
-        if not candidate_url(url):
+        if not self.accept_url(url):
             raise ValueError("该链接不在支持的招聘来源范围内")
         result = request_json(TOOLS + "fetch", {"url": url}, self.key, timeout=30)
         content = result.get("content")
@@ -79,6 +85,9 @@ class WebJobs:
         if not any(name in normalized(line) for line in lines):
             raise ValueError("网页正文未找到名单企业全称")
         verdict = self.inspect(lines, company)
+        return self.checked(url, content, lines, company, verdict)
+
+    def checked(self, url, content, lines, company, verdict):
         return checked_page(url, content, lines, company, verdict)
 
     def inspect(self, lines, company):
@@ -96,6 +105,9 @@ class WebJobs:
             "start and end (inclusive 1-based range for that one job only). Never combine multiple "
             "jobs. Choose the most relevant job if several qualify. Report uncertainty as entrance."
         )
+        return self.classify(lines, company, prompt)
+
+    def classify(self, lines, company, prompt):
         payload = {
             "model": self.config.get("model") or "deepseek-flash",
             "messages": [

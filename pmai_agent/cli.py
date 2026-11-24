@@ -6,6 +6,8 @@ from contextlib import closing
 
 from .city_lists import CITY_LISTS
 from .batch import batch_report
+from .business import BusinessPages
+from .leads import collect_business_lead
 from .lists import city_document, connect, entries, import_list, manual_company
 from .investigation import create, report, run_to_end, setup
 from .replay import Replay, demo
@@ -14,6 +16,8 @@ from .web_jobs import WebJobs
 
 
 def job_source(values, config):
+    if config.get("business_search"):
+        return BusinessPages(values, config)
     return WebJobs(values, config) if config.get("web_search") else PublicJobs()
 
 
@@ -45,6 +49,7 @@ def main(argv=None):
     live.add_argument("--url")
     live.add_argument("--limit", type=int, default=3)
     live.add_argument("--web-search", action="store_true", help="按公司全称查找公开中文招聘页面")
+    live.add_argument("--business", action="store_true", help="查企业产品与项目，保存有业务证据的企业线索")
     subs.add_parser("review").add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
     try:
@@ -76,9 +81,10 @@ def main(argv=None):
                         raise ValueError("该城市尚无默认名单；先 import-city-list，或手动指定企业")
                 is_official = document is not None and db.execute(
                     "SELECT 1 FROM official_lists WHERE document_id=?", (document,)).fetchone() is not None
-                config["web_search"] = args.web_search or is_official
+                config["business_search"] = args.business
+                config["web_search"] = args.web_search or args.business or is_official
                 if config["web_search"] and not values.get("DEEPSEEK_API_KEY"):
-                    raise ValueError("请先配置 DEEPSEEK_API_KEY 以搜索公开中文招聘页")
+                    raise ValueError("请先配置 DEEPSEEK_API_KEY 以搜索公开中文网页")
                 if not config["complex_enabled"] and not config["local_model"]:
                     raise ValueError("请先参照 .env.example 配置模型")
                 if not 1 <= args.count <= 20 or args.first_row < 1 or not 1 <= args.limit <= 20:
@@ -99,7 +105,12 @@ def main(argv=None):
                 runs = [create(db, company, config) for company in companies]
                 print(f"investigation_ids={runs}", file=sys.stderr, flush=True)
                 source = job_source(values, config)
-                reports = [run_to_end(db, run, source, model) for run in runs]
+                reports = []
+                for run in runs:
+                    record = run_to_end(db, run, source, model)
+                    if args.business:
+                        record["lead_id"] = collect_business_lead(db, record)
+                    reports.append(record)
                 result = reports if document is not None else reports[0]
             else:
                 setup(db)
@@ -108,6 +119,8 @@ def main(argv=None):
                     if result["config"]["mode"] == "live":
                         values = settings()
                         result = run_to_end(db, args.run, job_source(values, result["config"]), Models(values))
+                        if result["config"].get("business_search"):
+                            result["lead_id"] = collect_business_lead(db, result)
                     else:
                         replay = Replay()
                         result = run_to_end(db, args.run, replay, replay)

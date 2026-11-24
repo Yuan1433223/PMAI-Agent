@@ -54,7 +54,8 @@ def document(title, body):
 a{{color:#096452}}table{{border-collapse:collapse;width:100%}}td,th{{border-bottom:1px solid #cedbd6;
 text-align:left;padding:.5rem}}article,details{{margin:1em 0;padding:.8em;border:1px solid #cedbd6}}
 input,button,select{{font:inherit;margin:.25em}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}
-nav a{{margin-right:1rem}}input.search-terms{{width:min(36rem,90%)}}blockquote{{margin-left:1rem}}</style>
+nav a{{margin-right:1rem}}textarea.search-terms{{display:block;width:min(36rem,90%);font:inherit}}
+blockquote{{margin-left:1rem}}</style>
 <h1>{escape(title)}</h1>{body}</html>"""
 
 
@@ -106,9 +107,14 @@ def detail(result, token):
         parts.append("</dl>" + save_lead_form(run, job["job"], token) + "</article>")
     for page in result["pages"]:
         evidence = page.get("source")
-        proof = f'<p>招聘主体原文：{escape(evidence["employer_quote"])}</p>' if evidence else ""
+        is_business = evidence and evidence["kind"] == "business"
+        proof = f'<p>企业主体原文：{escape(evidence["employer_quote"])}</p>' if evidence else ""
+        if is_business:
+            proof += "".join(f'<blockquote>{escape(claim["quote"])}</blockquote>'
+                             for claim in page["claims"] if claim["field"] == "business")
         parts.append(f'<details><summary>{escape(page["title"] or page["url"])} · '
-                     f'{escape(page["status"])}</summary>{link(page["url"])} '
+                     f'{escape(page["status"])}</summary>'
+                     f'{link(page["url"], "打开业务原页" if is_business else "打开招聘原页")} '
                      f'{escape(page["note"])}{proof}<pre>{escape(page["body"] or "")}</pre></details>')
     parts.append(f'<form method="post" action="/feedback"><input type="hidden" name="token" value="{token}">'
                  f'<input type="hidden" name="id" value="{run}"><select aria-label="目标" name="job">'
@@ -146,13 +152,16 @@ def leads_view(rows, view, token):
         parts.append(f'<article id="lead-{lead_id}"><h2>{title}</h2>'
                      f'<p>{label}{unread} · 首次保存 {escape(row["first_seen"])} UTC</p>'
                      f'<p>{escape(row["reason"])}</p>')
+        if row["alias"]:
+            parts.append(f'<p>网页所列简称：{escape(row["alias"])}</p>')
         if row["quote"]:
             parts.append(f'<blockquote>{escape(row["quote"])}</blockquote>')
         if row["source_url"]:
             parts.append(link(row["source_url"], "打开线索原页") + " · ")
         parts.append(f'<a href="/run?id={row["run"]}">查看调查</a>'
-                     f'<p><label>招聘软件搜索词 <input class="search-terms" readonly '
-                     f'value="{escape(row["search_terms"])}"></label></p>')
+                     f'<p><label>招聘软件搜索词 <textarea class="search-terms" readonly '
+                     f'rows="{min(6, row["search_terms"].count(chr(10)) + 1)}">'
+                     f'{escape(row["search_terms"])}</textarea></label></p>')
         options = "".join(f'<option value="{value}"{" selected" if row["stage"] == value else ""}>{name}</option>'
                           for value, name in STAGES.items())
         parts.append(f'<form method="post" action="/leads/update"><input type="hidden" name="token" value="{token}">'
