@@ -8,6 +8,7 @@ from .city_lists import CITY_LISTS
 from .batch import batch_report
 from .business import BusinessPages
 from .leads import collect_business_lead
+from .prospecting import prospect
 from .lists import city_document, connect, entries, import_list, manual_company
 from .investigation import create, report, run_to_end, setup
 from .replay import Replay, demo
@@ -50,6 +51,12 @@ def main(argv=None):
     live.add_argument("--limit", type=int, default=3)
     live.add_argument("--web-search", action="store_true", help="按公司全称查找公开中文招聘页面")
     live.add_argument("--business", action="store_true", help="查企业产品与项目，保存有业务证据的企业线索")
+    discovery = subs.add_parser("prospect", help="从公开业务案例反查企业")
+    discovery.add_argument("--keywords", required=True)
+    discovery.add_argument("--city", default="深圳")
+    discovery.add_argument("--role", default="Agent / 大模型应用 / FDE")
+    discovery.add_argument("--limit", type=int, default=6)
+    discovery.add_argument("--outside-roster", action="store_true", help="只保存本次比对名单以外的企业")
     subs.add_parser("review").add_argument("--port", type=int, default=8765)
     args = parser.parse_args(argv)
     try:
@@ -69,6 +76,9 @@ def main(argv=None):
             elif args.command == "summarize":
                 setup(db)
                 result = batch_report(db, args.runs)
+            elif args.command == "prospect":
+                result = prospect(db, settings(), city=args.city, keywords=args.keywords, role=args.role,
+                                  limit=args.limit, outside_only=args.outside_roster)
             elif args.command == "investigate":
                 values = settings()
                 config = dict(mode="live", city=args.city, role=args.role, cohort=args.cohort,

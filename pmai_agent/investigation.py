@@ -83,6 +83,41 @@ def check_claims(body, response):
     return claims
 
 
+def business_claims(body, page):
+    quotes = [("business", page.get("business_quote", ""))]
+    if "business_place_quote" in page:
+        quotes.append(("business_place", page["business_place_quote"]))
+    claims = []
+    for field, quote in quotes:
+        offset = body.find(quote) if quote else -1
+        if offset < 0:
+            raise ValueError("业务或城市引文不在原文快照中")
+        claims.append((field, "supports", quote, offset))
+    return claims
+
+
+def record_visit(db, run, url, job, title, body, status, note, source, claims):
+    db.execute("INSERT INTO visits(run,url,job,title,body,status,note) VALUES(?,?,?,?,?,?,?)",
+               (run, url, job, title, body, status, note))
+    if source:
+        db.execute("INSERT INTO verified_sources VALUES(?,?,?,?,?)",
+                   (run, url, source["kind"], source["employer_quote"], source.get("snapshot")))
+    db.executemany("INSERT INTO claims VALUES(?,?,?,?,?,?)", [(run, url, *claim) for claim in claims])
+
+
+def record_business_run(db, company_id, config, pages):
+    """Persist already verified snapshots and the completed investigation atomically."""
+    snapshots = [(url, page, business_claims(page["body"], page)) for url, page in pages.items()]
+    with db:
+        run = db.execute(
+            """INSERT INTO investigations(company_id,config,phase,discovery,reason)
+               VALUES(?,?,'done','found','关键词发现完成')""", (company_id, json.dumps(config))).lastrowid
+        for url, page, claims in snapshots:
+            record_visit(db, run, url, None, page["title"], page["body"], "verified_business", "",
+                         page["source"], claims)
+    return report(db, run)
+
+
 def step(db, run, source, model):
     # Serialize one bounded step. A crash rolls it back; completed steps survive.
     with db:
@@ -123,13 +158,12 @@ def step(db, run, source, model):
             source_evidence = page.get("source")
             status = "unverified" if job else "verified_entrance"
             if source_evidence and source_evidence["kind"] == "business":
-                quote = page.get("business_quote", "")
-                offset = body.find(quote) if quote else -1
-                if offset < 0:
+                try:
+                    claims.extend(business_claims(body, page))
+                except ValueError:
                     source_evidence = None
                     status = "unverified"
-                    raise ValueError("业务引文不在原文快照中")
-                claims.append(("business", "supports", quote, offset))
+                    raise
                 status = "verified_business"
             response = model.assess(body, config) if job else {}
             if not isinstance(response, dict):
@@ -152,13 +186,7 @@ def step(db, run, source, model):
                     queue.insert(0, extra)
         except (ValueError, OSError) as exc:
             note = str(exc)
-        db.execute("INSERT INTO visits(run,url,job,title,body,status,note) VALUES(?,?,?,?,?,?,?)",
-                   (run, url, job, title, body, status, note))
-        if source_evidence:
-            db.execute("INSERT INTO verified_sources VALUES(?,?,?,?,?)",
-                       (run, url, source_evidence["kind"], source_evidence["employer_quote"],
-                        source_evidence.get("snapshot")))
-        db.executemany("INSERT INTO claims VALUES(?,?,?,?,?,?)", [(run, url, *c) for c in claims])
+        record_visit(db, run, url, job, title, body, status, note, source_evidence, claims)
         db.execute("UPDATE investigations SET phase=?,queue=?,reason=? WHERE id=?",
                    ("visit" if queue else "done", json.dumps(queue), "" if queue else "材料已查完", run))
         return True

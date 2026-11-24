@@ -1,6 +1,7 @@
 """Persistent local job-search leads, linked to the investigations that found them."""
 import csv
 import io
+import json
 import re
 import unicodedata
 
@@ -12,6 +13,11 @@ STAGES = {
     "known": "已知",
     "verified": "已在招聘软件确认",
     "applied": "已投递",
+}
+ROSTER_LABELS = {
+    "in_roster": "在本次比对名单",
+    "outside_roster": "未出现在本次比对名单",
+    "not_compared": "名单未比对",
 }
 
 
@@ -128,19 +134,24 @@ def saved_leads(db, view="all"):
     params = (view,) if view in STAGES else ()
     rows = [dict(row) for row in db.execute(f"""
         SELECT l.*, c.raw_name AS company, o.run, o.reason, o.quote, o.source_url, o.search_terms,
-               source.employer_quote AS identity_quote,
+               source.employer_quote AS identity_quote, i.config AS investigation_config, place.quote AS place_quote,
                (SELECT COUNT(*) FROM lead_observations h WHERE h.lead_id=l.id) AS observations
         FROM saved_leads l JOIN companies c ON c.id=l.company_id
         JOIN lead_observations o ON o.lead_id=l.id AND o.run=(
             SELECT history.run FROM lead_observations history WHERE history.lead_id=l.id
             ORDER BY history.evidence_rank DESC, history.run DESC LIMIT 1
         )
+        JOIN investigations i ON i.id=o.run
         LEFT JOIN verified_sources source ON source.run=o.run AND source.url=o.source_url
+        LEFT JOIN claims place ON place.run=o.run AND place.url=o.source_url AND place.field='business_place'
         WHERE {condition}
         ORDER BY l.reviewed_at IS NOT NULL, l.id DESC
     """, params)]
     for row in rows:
         row["alias"] = documented_alias(row["company"], row["identity_quote"])
+        config = json.loads(row.pop("investigation_config"))
+        row["keywords"] = config.get("keywords", "")
+        row["roster_label"] = ROSTER_LABELS.get(config.get("roster_membership"), "")
     return rows
 
 
@@ -154,10 +165,11 @@ def export_csv(rows):
     output = io.StringIO(newline="")
     writer = csv.writer(output)
     writer.writerow(("企业全称", "网页所列简称", "岗位", "搜索词", "状态", "首次保存时间（UTC）", "发现依据",
-                     "原文", "来源链接", "备注"))
+                     "原文", "城市关联原文", "发现关键词", "名单比对", "来源链接", "备注"))
     for row in rows:
         writer.writerow([cell(value) for value in (
             row["company"], row["alias"], row["job_title"], row["search_terms"], STAGES[row["stage"]],
-            row["first_seen"], row["reason"], row["quote"], row["source_url"], row["note"],
+            row["first_seen"], row["reason"], row["quote"], row["place_quote"] or "", row["keywords"],
+            row["roster_label"], row["source_url"], row["note"],
         )])
     return "\ufeff" + output.getvalue()

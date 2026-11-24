@@ -72,6 +72,14 @@ class WebJobs:
                                   and (url := self.accept_url(row["url"]))))
 
     def fetch(self, url, company):
+        content, lines = self.read_page(url)
+        name = normalized(company)
+        if not any(name in normalized(line) for line in lines):
+            raise ValueError("网页正文未找到名单企业全称")
+        verdict = self.inspect(lines, company)
+        return self.checked(url, content, lines, company, verdict)
+
+    def read_page(self, url):
         if not self.key:
             raise ValueError("恢复搜索需要配置 DEEPSEEK_API_KEY")
         if not self.accept_url(url):
@@ -80,12 +88,7 @@ class WebJobs:
         content = result.get("content")
         if not isinstance(content, str) or not content.strip():
             raise ValueError("公开页面无可读正文")
-        lines = content[:11000].splitlines()
-        name = normalized(company)
-        if not any(name in normalized(line) for line in lines):
-            raise ValueError("网页正文未找到名单企业全称")
-        verdict = self.inspect(lines, company)
-        return self.checked(url, content, lines, company, verdict)
+        return content, content[:11000].splitlines()
 
     def checked(self, url, content, lines, company, verdict):
         return checked_page(url, content, lines, company, verdict)
@@ -114,7 +117,7 @@ class WebJobs:
                 {"role": "system", "content": prompt},
                 {"role": "user", "content": json.dumps({
                     "company": company, "city": self.config["city"], "role": self.config["role"],
-                    "cohort": self.config.get("cohort"),
+                    "cohort": self.config.get("cohort"), "keywords": self.config.get("keywords"),
                     "lines": "\n".join(f"{i} {line}" for i, line in enumerate(lines, 1)),
                 }, ensure_ascii=False)},
             ],

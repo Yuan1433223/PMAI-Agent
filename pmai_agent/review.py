@@ -7,7 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 from .investigation import report, setup
-from .leads import STAGES, export_csv, save_lead, saved_leads, setup_leads, update_lead
+from .leads import ROSTER_LABELS, STAGES, export_csv, save_lead, saved_leads, setup_leads, update_lead
 from .lists import connect
 
 
@@ -87,7 +87,10 @@ def detail(result, token):
         parts.append(f'<p>名单来源 · {escape(origin["city"])} {origin["year"]} 年 {escape(origin["status"])} · '
                      f'第 {origin["page_no"]} 页 / 序号 {origin["row_no"]} · '
                      f'<a href="{escape(origin["publication"])}">主管部门公示</a></p>')
-    elif config["mode"] == "live":
+    if config.get("keywords"):
+        membership = ROSTER_LABELS[config["roster_membership"]]
+        parts.append(f'<p>公开业务关键词 · {escape(config["keywords"])} · {escape(membership)}</p>')
+    elif config["mode"] == "live" and not (origin and origin["publication"]):
         parts.append("<p>名单来源 · 非官方名单批次</p>")
     parts.append(save_lead_form(run, "", token))
     options = ['<option value="">整次调查</option>']
@@ -112,6 +115,8 @@ def detail(result, token):
         if is_business:
             proof += "".join(f'<blockquote>{escape(claim["quote"])}</blockquote>'
                              for claim in page["claims"] if claim["field"] == "business")
+            proof += "".join(f'<p>城市关联原文 · {escape(claim["quote"])}</p>'
+                             for claim in page["claims"] if claim["field"] == "business_place")
         parts.append(f'<details><summary>{escape(page["title"] or page["url"])} · '
                      f'{escape(page["status"])}</summary>'
                      f'{link(page["url"], "打开业务原页" if is_business else "打开招聘原页")} '
@@ -154,8 +159,12 @@ def leads_view(rows, view, token):
                      f'<p>{escape(row["reason"])}</p>')
         if row["alias"]:
             parts.append(f'<p>网页所列简称：{escape(row["alias"])}</p>')
+        if row["keywords"]:
+            parts.append(f'<p>业务关键词 · {escape(row["keywords"])} · {escape(row["roster_label"])}</p>')
         if row["quote"]:
             parts.append(f'<blockquote>{escape(row["quote"])}</blockquote>')
+        if row["place_quote"]:
+            parts.append(f'<p>城市关联原文 · {escape(row["place_quote"])}</p>')
         if row["source_url"]:
             parts.append(link(row["source_url"], "打开线索原页") + " · ")
         parts.append(f'<a href="/run?id={row["run"]}">查看调查</a>'

@@ -2,6 +2,7 @@ import hashlib
 import io
 import re
 import sqlite3
+import unicodedata
 from pathlib import Path
 
 from pypdf import PdfReader
@@ -115,11 +116,12 @@ def manual_company(db, name):
         raise ValueError("企业名称不能为空")
     with db:
         db.execute("BEGIN IMMEDIATE")
-        row = db.execute("""SELECT c.id FROM companies c WHERE c.raw_name=?
-                            AND NOT EXISTS (SELECT 1 FROM source_entries e WHERE e.company_id=c.id)
-                            ORDER BY c.id LIMIT 1""", (name,)).fetchone()
-        if row:
-            return row["id"]
+        key = unicodedata.normalize("NFKC", name).casefold()
+        for row in db.execute("""SELECT c.id, c.raw_name FROM companies c
+                                 WHERE NOT EXISTS (SELECT 1 FROM source_entries e WHERE e.company_id=c.id)
+                                 ORDER BY c.id"""):
+            if unicodedata.normalize("NFKC", row["raw_name"]).casefold() == key:
+                return row["id"]
         return db.execute("INSERT INTO companies(raw_name) VALUES(?)", (name,)).lastrowid
 
 
