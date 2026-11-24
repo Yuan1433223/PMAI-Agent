@@ -7,7 +7,9 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode, urlsplit
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+from .investigation import UnsupportedCompany
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -24,7 +26,10 @@ def request_json(url, payload=None, key=None, timeout=20):
     if key:
         headers["Authorization"] = "Bearer " + key
     request = Request(url, data=data, headers=headers)
-    with build_opener(NoRedirect).open(request, timeout=timeout) as response:
+    handlers = [NoRedirect]
+    if urlsplit(url).hostname in ("127.0.0.1", "localhost", "::1"):
+        handlers.append(ProxyHandler({}))
+    with build_opener(*handlers).open(request, timeout=timeout) as response:
         content = response.read(4_000_001)
     if len(content) > 4_000_000:
         raise ValueError("响应超出大小上限")
@@ -82,7 +87,7 @@ class PublicJobs:
             return ["https://careers.tencent.com/jobdesc.html?postId=" + str(r["PostId"]) for r in rows]
         token = slug(company)
         if not token:
-            return []
+            raise UnsupportedCompany("当前目录缺少此企业的可核验入口")
         try:
             result = request_json(BOARD + token + "/jobs")
         except HTTPError as exc:
@@ -101,7 +106,8 @@ class PublicJobs:
             if str(row.get("PostId")) != post:
                 raise ValueError("岗位标识不匹配")
             title = row["RecruitPostName"]
-            lines = [title, row.get("LocationName"), row.get("Responsibility"), row.get("Requirement")]
+            location = row.get("LocationName")
+            description = [row.get("Responsibility"), row.get("Requirement")]
         else:
             row = request_json(f"{BOARD}{board}/jobs/{post}")
             if str(row.get("id")) != post or slug(row.get("company_name") or "") != slug(company):
@@ -109,7 +115,9 @@ class PublicJobs:
             title = row["title"]
             parser = TextParser()
             parser.feed(html.unescape(row.get("content", "")))
-            lines = [title, (row.get("location") or {}).get("name"), *parser.parts]
+            location = (row.get("location") or {}).get("name")
+            description = parser.parts
+        lines = [title, f"Workplace: {location}" if location else None, *description]
         return dict(job=board + "/" + post, title=title, body="\n".join(filter(None, lines))[:40000])
 
 
@@ -126,7 +134,8 @@ def settings(path=Path(".env")):
 def model_config(values):
     return dict(model=values.get("DEEPSEEK_MODEL") or "deepseek-flash",
                 local_model=values.get("PMAI_LOCAL_MODEL", ""),
-                complex_enabled=bool(values.get("DEEPSEEK_API_KEY")), rule="evidence-v1")
+                complex_enabled=bool(values.get("DEEPSEEK_API_KEY")) and values.get("PMAI_LOCAL_ONLY") != "1",
+                rule="evidence-v2")
 
 
 class Models:
@@ -146,19 +155,48 @@ class Models:
                   "(a short exact substring from this page). City means workplace; role means duties. "
                   "Only judge cohort with explicit graduation requirements. Only judge validity "
                   "from explicit open/closed or deadline evidence. Missing details are unknown.")
+        page = body[:6500]
+        if not cloud and fields == ["city"]:
+            prompt = ("Read the job's Workplace line. Copy its location exactly, without the prefix. "
+                      'Return only JSON in this form: {"city":"exact location"}. '
+                      'If no Workplace line exists, return {}.')
+            page = "\n".join(body.splitlines()[:2])
         url = "https://api.deepseek.com/chat/completions" if cloud else self.local
         payload = dict(model=config["model"] if cloud else config["local_model"],
                        messages=[dict(role="system", content=prompt),
                                  dict(role="user", content=json.dumps(dict(targets=targets, fields=fields,
-                                                                          page=body[:6500]), ensure_ascii=False))],
+                                                                          page=page), ensure_ascii=False))],
                        response_format={"type": "json_object"}, temperature=0, max_tokens=450)
         if cloud:
             payload["thinking"] = {"type": "disabled"}
+        elif fields != ["city"]:
+            payload["messages"][0]["content"] += (
+                " Fill every requested key. For an unknown field use null. "
+                "For role, look for explicit references to the target role in the title and duties. "
+                "Copy the shortest span showing the match.")
+            claim = {"type": "object", "properties": {
+                "verdict": {"enum": ["supports", "contradicts"]},
+                "quote": {"type": "string"}}, "required": ["verdict", "quote"],
+                "additionalProperties": False}
+            schema = {"type": "object", "properties": {
+                field: {"anyOf": [claim, {"type": "null"}]} for field in fields},
+                "required": fields,
+                "additionalProperties": False}
+            payload["response_format"] = {"type": "json_schema", "json_schema": {
+                "name": "job_evidence", "schema": schema}}
         response = request_json(url, payload, self.key if cloud else None, timeout=120)
         try:
             result = json.loads(response["choices"][0]["message"]["content"])
             if not isinstance(result, dict):
                 raise ValueError("模型返回类型异常")
+            if not cloud and fields == ["city"]:
+                quote = result.get("city")
+                location = next((line.removeprefix("Workplace: ") for line in page.splitlines()
+                                 if line.startswith("Workplace: ")), "")
+                city = config["city"].strip().casefold()
+                if isinstance(quote, str) and quote == location and city and city in quote.casefold():
+                    return {"city": {"quote": quote, "verdict": "supports"}}
+                return {}
             return {k: v for k, v in result.items() if k in fields}
         except (KeyError, IndexError, TypeError) as exc:
             raise ValueError("模型响应缺少结构化结果") from exc
@@ -173,8 +211,8 @@ class Models:
             raise ValueError("恢复调查需要配置 DEEPSEEK_API_KEY")
         if not cloud and not local:
             raise ValueError("请配置本地模型或 DEEPSEEK_API_KEY")
-        if not local or not cloud:
-            return self.decide(body, config, ["city", *fields], cloud)
+        if not local:
+            return self.decide(body, config, ["city", *fields], True)
         result = self.decide(body, config, ["city"], False)
-        result.update(self.decide(body, config, fields, True))
+        result.update(self.decide(body, config, fields, cloud))
         return result

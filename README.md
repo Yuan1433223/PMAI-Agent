@@ -2,11 +2,11 @@
 
 PMAI-Agent 的目标是做一个免费、开源的求职调查 Agent，帮助大学生和其他求职者从招聘推荐列表之外发现企业，找到值得自己核查的岗位。首个使用场景是深圳的 Agent 开发、大模型应用和 FDE 机会。
 
-给它一份企业名单、城市、方向和可选的毕业届别，它将逐家查找材料，区分招聘依据、待确认机会和企业业务线索。求职者可以从每条岗位判断回到原文，看到哪些条件还未知，再决定是否跟进。投递和联系企业由求职者自己决定。
+给它一份企业名单、城市、方向和可选的毕业届别，它会在支持的招聘来源逐家查找材料，区分有招聘依据、待确认和明确不匹配的岗位。求职者可以从每条判断回到原文，看到哪些条件还未知，再决定是否跟进。
 
 ## 项目状态
 
-已实现本地 PDF 名单导入。首版以本地单用户为目标，计划提供无需账户的样例调查、本地模型接入和公开来源调查。代码许可证尚待维护者选定。
+首版支持本地 PDF 名单导入、单家或小批次调查、证据核查、反馈和导出。离线样例无需账户。代码许可证尚待维护者选定。
 
 - [阶段计划与验收](docs/首版实施计划.md)
 - [用户任务与需求](docs/需求.md)
@@ -33,14 +33,25 @@ python -m unittest discover -s tests -v
 
 把 `.env.example` 的配置项填入本机 `.env`；已有文件只补缺项。本地接口支持 Ollama 或 llama.cpp 的 OpenAI 兼容入口。配置本地模型和 DeepSeek 时，地点交给小模型，职责、届别和时效交给 `deepseek-flash`。只配置一个模型时由该模型完成分析。模型只接收任务条件与单岗位的公开材料。演示无需配置。
 
+配置 `PMAI_LOCAL_ONLY=1` 可使用纯本地推理。公开岗位调查仍需联网读取招聘来源。
+
 ```shell
 python -m pmai_agent investigate --company 腾讯 --role Agent --city 深圳 --cohort 2027 --limit 2
 python -m pmai_agent investigate --company Anthropic --role Engineer --city "San Francisco" --limit 1
+python -m pmai_agent investigate --document 1 --first-row 1 --count 3 --limit 2
 ```
 
 导入名单后可用 `--company-id` 选择已登记主体。腾讯招聘适配器从首批最多 50 条候选中优先调查目标城市；其他企业尝试按英文名称查询 Greenhouse，再核实岗位所属公司。也可传 `--url` 指定这两类来源的岗位详情。国内中小企业覆盖仍有限。每次保存调查 ID，可用 `show` 看抓取时间、原文、引文位置、失败原因与未知项。
 
 Windows CPU 用户可运行 `python scripts/prepare_local_model.py` 在 `data/model` 准备 llama.cpp 和 Qwen2.5-1.5B-Instruct。脚本核对固定版本的 SHA-256。启用本地服务后将服务地址与模型别名填入 `.env`。
+
+已有 Ollama 的机器可使用 `ollama run qwen2.5:1.5b` 准备模型，再使用模板里的本地地址和名称。已有 llama-server 的机器可用 `--weights-only` 只下载权重，然后启动下列服务并配置 `PMAI_LOCAL_BASE=http://127.0.0.1:18087/v1` 和 `PMAI_LOCAL_MODEL=qwen-local`。
+
+```shell
+llama-server -m data/model/qwen-1.5b.gguf --alias qwen-local --host 127.0.0.1 --port 18087 -c 4096
+```
+
+“无法访问”可展开查看网络或来源错误。“未调查”表示当前来源缺入口。“待核查”可查看快照及被拒绝的判断。中断后使用原调查 ID 恢复；已经结束的调查再次执行 `investigate` 会保留一份新的独立记录。
 
 ## 核查与跟进
 

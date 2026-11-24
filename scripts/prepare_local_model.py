@@ -1,5 +1,6 @@
 """Download pinned Windows CPU runtime and weights into the ignored workspace data directory."""
 import concurrent.futures
+import argparse
 import hashlib
 import os
 import shutil
@@ -64,8 +65,12 @@ def download(asset):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--weights-only", action="store_true", help="Use an existing CPU runtime")
+    args = parser.parse_args()
     ROOT.mkdir(parents=True, exist_ok=True)
-    for asset in ASSETS:
+    for asset in ASSETS[1:] if args.weights_only else ASSETS:
         download(asset)
-    with zipfile.ZipFile(ROOT / ASSETS[0][0]) as archive:
-        archive.extractall(ROOT / "llama-cpu")
+    if not args.weights_only:
+        with zipfile.ZipFile(ROOT / ASSETS[0][0]) as archive:
+            archive.extractall(ROOT / "llama-cpu")

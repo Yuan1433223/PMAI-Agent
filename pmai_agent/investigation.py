@@ -6,6 +6,10 @@ import re
 FIELDS = ("role", "city", "cohort", "validity")
 
 
+class UnsupportedCompany(ValueError):
+    """No installed discovery adapter covers this company name."""
+
+
 def setup(db):
     db.executescript("""
         CREATE TABLE IF NOT EXISTS investigations (
@@ -85,6 +89,8 @@ def step(db, run, source, model):
                 queue = list(dict.fromkeys(source.discover(state["company"], config)))
                 status = "found" if queue else "not_found"
                 reason = "" if queue else "未找到入口或岗位"
+            except UnsupportedCompany as exc:
+                status, reason = "not_investigated", str(exc)
             except (OSError, ValueError) as exc:
                 status, reason = "inaccessible", str(exc)
             db.execute("UPDATE investigations SET queue=?,phase=?,discovery=?,reason=? WHERE id=?",
@@ -105,8 +111,17 @@ def step(db, run, source, model):
             if not body.strip():
                 raise ValueError("正文为空")
             status = "unverified"
-            claims = check_claims(body, model.assess(body, config))
-            status = "assessed"
+            response = model.assess(body, config)
+            if not isinstance(response, dict):
+                raise ValueError("模型输出应为字段对象")
+            rejected = []
+            for field, item in response.items():
+                try:
+                    claims.extend(check_claims(body, {field: item}))
+                except ValueError as exc:
+                    rejected.append(str(exc))
+            status = "assessed" if not rejected or claims else "unverified"
+            note = "；".join(rejected)
             # Supplement only an already relevant job and only for an explicit target cohort.
             known = {item[0]: item[1] for item in claims}
             if known.get("role") == "supports" and config.get("cohort") and "cohort" not in known:
@@ -142,6 +157,10 @@ def report(db, run):
         if page["job"] is None:
             continue
         job = jobs.setdefault(page["job"], {"job": page["job"], "title": page["title"], "fields": {}})
+        for line in (page["body"] or "").splitlines():
+            if re.search(r"(?:\d+\s*年(?:以上)?[^。\n]{0,24}经验|\d+\+?\s+years.{0,35}experience)", line, re.I):
+                job.setdefault("experience", {"quote": line[:400], "url": page["url"]})
+                break
         for claim in page["claims"]:
             job["fields"].setdefault(claim["field"], []).append(dict(claim, url=page["url"]))
     for job in jobs.values():

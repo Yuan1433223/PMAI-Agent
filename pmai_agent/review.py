@@ -80,6 +80,9 @@ def detail(result, token):
     for job in result["jobs"]:
         options.append(f'<option value="{escape(job["job"])}">{escape(job["title"])}</option>')
         parts.append(f'<article><h2>{escape(job["title"])}</h2><p>{escape(job["tier"])}</p><dl>')
+        if "experience" in job:
+            item = job["experience"]
+            parts.append(f'<dt>经验要求原文</dt><dd>{escape(item["quote"])} · {link(item["url"])}</dd>')
         for field, label in LABELS.items():
             parts.append(f"<dt>{label}</dt>")
             for c in job["fields"].get(field, []):

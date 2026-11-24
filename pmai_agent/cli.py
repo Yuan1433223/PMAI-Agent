@@ -5,13 +5,14 @@ import sys
 from contextlib import closing
 
 from .lists import connect, entries, import_list
-from .investigation import report, run_to_end, setup
+from .investigation import create, report, run_to_end, setup
 from .replay import Replay, demo
-from .investigation import create
 from .live import Models, PublicJobs, model_config, settings
 
 
 def main(argv=None):
+    if not sys.stdout.isatty() and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="pmai")
     parser.add_argument("--db", default="data/app.sqlite3")
     subs = parser.add_subparsers(dest="command", required=True)
@@ -24,6 +25,9 @@ def main(argv=None):
     identity = live.add_mutually_exclusive_group(required=True)
     identity.add_argument("--company")
     identity.add_argument("--company-id", type=int)
+    identity.add_argument("--document", type=int)
+    live.add_argument("--first-row", type=int, default=1)
+    live.add_argument("--count", type=int, default=1)
     live.add_argument("--city", default="深圳")
     live.add_argument("--role", default="Agent")
     live.add_argument("--cohort", default="")
@@ -50,14 +54,28 @@ def main(argv=None):
                               url=args.url, limit=args.limit, **model_config(values))
                 if not config["complex_enabled"] and not config["local_model"]:
                     raise ValueError("请先参照 .env.example 配置模型")
-                company = args.company_id
-                if company is None:
+                if not 1 <= args.count <= 20 or args.first_row < 1 or not 1 <= args.limit <= 20:
+                    raise ValueError("每批 1 至 20 家，每家 1 至 20 页，起始序号至少为 1")
+                model = Models(values)
+                if args.document is not None:
+                    if args.url:
+                        raise ValueError("指定岗位链接时请选择单个企业")
+                    companies = [r[0] for r in db.execute(
+                        "SELECT company_id FROM source_entries WHERE document_id=? AND row_no>=? "
+                        "ORDER BY row_no LIMIT ?", (args.document, args.first_row, args.count))]
+                    if not companies:
+                        raise ValueError("名单所选范围为空")
+                elif args.company_id is not None:
+                    companies = [args.company_id]
+                else:
                     with db:
                         company = db.execute("INSERT INTO companies(raw_name) VALUES(?)",
                                              (args.company,)).lastrowid
-                run = create(db, company, config)
-                print(f"investigation_id={run}", file=sys.stderr, flush=True)
-                result = run_to_end(db, run, PublicJobs(), Models(values))
+                    companies = [company]
+                runs = [create(db, company, config) for company in companies]
+                print(f"investigation_ids={runs}", file=sys.stderr, flush=True)
+                reports = [run_to_end(db, run, PublicJobs(), model) for run in runs]
+                result = reports if args.document is not None else reports[0]
             else:
                 setup(db)
                 result = report(db, args.run)

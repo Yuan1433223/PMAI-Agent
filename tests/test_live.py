@@ -29,6 +29,15 @@ class Sources(unittest.TestCase):
         self.assertEqual([(c.args[2], c.args[3]) for c in decide.call_args_list],
                          [(["city"], False), (["role", "validity", "cohort"], True)])
 
+    @patch("pmai_agent.live.request_json")
+    def test_local_city_uses_only_workplace(self, request):
+        request.return_value = {"choices": [{"message": {"content": '{"city":"深圳"}'}}]}
+        model = Models({})
+        config = {"city": "深圳", "local_model": "qwen"}
+        claims = model.decide("岗位\nWorkplace: 深圳\n公司总部位于北京", config, ["city"], False)
+        self.assertEqual(claims["city"], {"quote": "深圳", "verdict": "supports"})
+        self.assertEqual(model.decide("岗位\nWorkplace: 上海\n深圳总部", config, ["city"], False), {})
+
     @patch("pmai_agent.live.request_json", side_effect=OSError("model unavailable"))
     def test_model_unavailable(self, request):
         with self.assertRaises(OSError):
